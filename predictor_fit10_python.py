@@ -11,6 +11,9 @@ COEFS = MODEL_EXPORT["coefficients"]
 BASELINE_SURVIVAL = MODEL_EXPORT["baseline_survival_at_lp0"]
 FACTOR_LEVELS = MODEL_EXPORT["factor_levels"]
 LP_CENTERING_CONSTANT = MODEL_EXPORT.get("lp_centering_constant", MODEL_EXPORT.get("LP_CENTERING_CONSTANT", 0.0))
+RISK_STRATIFICATION = MODEL_EXPORT.get("risk_stratification", {})
+LP_CUTOFF = float(RISK_STRATIFICATION.get("lp_cutoff", 0.6202395))
+POINTS_CUTOFF = float(RISK_STRATIFICATION.get("points_cutoff", 173.7308))
 
 REQUIRED_FIELDS = [
     "Age_at_onset",
@@ -81,6 +84,10 @@ def compute_linear_predictor(payload: Dict[str, Any]) -> float:
     return compute_raw_score(payload) - float(LP_CENTERING_CONSTANT)
 
 
+def classify_risk_by_lp(lp: float) -> str:
+    return "High risk" if lp > LP_CUTOFF else "Low risk"
+
+
 def predict_fit10_python(payload: Dict[str, Any]) -> Dict[str, Any]:
     missing = validate_payload(payload)
     if missing:
@@ -92,6 +99,7 @@ def predict_fit10_python(payload: Dict[str, Any]) -> Dict[str, Any]:
     surv_3y = BASELINE_SURVIVAL["3y"] ** hr
     surv_5y = BASELINE_SURVIVAL["5y"] ** hr
     surv_7y = BASELINE_SURVIVAL["7y"] ** hr
+    risk_label = classify_risk_by_lp(lp)
 
     return {
         "input": payload,
@@ -103,5 +111,8 @@ def predict_fit10_python(payload: Dict[str, Any]) -> Dict[str, Any]:
             "risk_3y": round(1 - surv_3y, 4),
             "risk_5y": round(1 - surv_5y, 4),
             "risk_7y": round(1 - surv_7y, 4),
+            "risk_group": risk_label,
+            "lp_cutoff_for_risk_group": round(LP_CUTOFF, 4),
+            "points_cutoff_for_risk_group": round(POINTS_CUTOFF, 1),
         },
     }
