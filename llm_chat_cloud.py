@@ -13,9 +13,13 @@ def ask_pd_education_question(question: str) -> dict:
     if not DEEPSEEK_API_KEY:
         return {"ok": False, "error": "DeepSeek API key was not detected in Streamlit secrets or environment variables.", "answer": None}
 
+    question = question.strip()
+    if not question:
+        return {"ok": False, "error": "Please enter a question first.", "answer": None}
+
     messages = [
         {"role": "system", "content": PD_QA_SYSTEM_PROMPT},
-        {"role": "user", "content": question.strip()},
+        {"role": "user", "content": question},
     ]
 
     payload = {

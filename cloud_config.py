@@ -3,6 +3,7 @@ import streamlit as st
 
 
 def _get_secret(name: str, default: str = "") -> str:
+    """Read Streamlit Cloud secret first, then environment variable."""
     try:
         value = st.secrets.get(name, default)
         if value is None:

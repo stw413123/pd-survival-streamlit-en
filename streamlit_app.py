@@ -5,7 +5,7 @@ import streamlit as st
 from cloud_config import deepseek_ready
 from llm_extract_cloud import extract_variables_from_text
 from llm_chat_cloud import ask_pd_education_question
-from predictor_fit10_python import predict_fit10_python, validate_payload
+from predictor_fit10_python import MODEL_EXPORT, predict_fit10_python, validate_payload
 
 st.set_page_config(page_title="PD Survival Risk Prediction Platform", layout="wide")
 
@@ -20,7 +20,10 @@ REQUIRED_FIELDS = [
     "Falls",
     "Depression",
     "Cognitive_dysfunction",
+    "LEDD",
 ]
+
+NUMERIC_FIELDS = ["disease_duration_baseline", "UPDRS_Part_III", "LEDD"]
 
 DEFAULT_PAYLOAD = {
     "Age_at_onset": ">50",
@@ -28,11 +31,26 @@ DEFAULT_PAYLOAD = {
     "GBA1_mutation": "No",
     "T2D": "No",
     "DBS": "No",
-    "UPDRS_Part_III": 0.0,
+    "UPDRS_Part_III": 30.0,
     "HY_Stage": "3",
     "Falls": "No",
     "Depression": "No",
     "Cognitive_dysfunction": "No",
+    "LEDD": 300.0,
+}
+
+DISPLAY_NAMES = {
+    "Age_at_onset": "Age at onset",
+    "disease_duration_baseline": "Disease duration at baseline (years)",
+    "GBA1_mutation": "GBA1 mutation",
+    "T2D": "Type 2 diabetes",
+    "DBS": "DBS at baseline",
+    "UPDRS_Part_III": "UPDRS Part III",
+    "HY_Stage": "H&Y stage",
+    "Falls": "History of falls",
+    "Depression": "Depression",
+    "Cognitive_dysfunction": "Cognitive dysfunction",
+    "LEDD": "LEDD (mg/day)",
 }
 
 
@@ -66,9 +84,9 @@ def apply_pending_fill_if_any():
 
     changed = []
     for field, value in pending.items():
-        if value is None:
+        if value is None or field not in REQUIRED_FIELDS:
             continue
-        if field in ["disease_duration_baseline", "UPDRS_Part_III"]:
+        if field in NUMERIC_FIELDS:
             try:
                 value = float(value)
             except Exception:
@@ -84,17 +102,8 @@ def show_flash_message():
     msg_obj = st.session_state.get("ai_message")
     if not msg_obj:
         return
-
     level, msg = msg_obj
-    if level == "success":
-        st.success(msg)
-    elif level == "warning":
-        st.warning(msg)
-    elif level == "error":
-        st.error(msg)
-    else:
-        st.info(msg)
-
+    getattr(st, level if level in ["success", "warning", "error", "info"] else "info")(msg)
     st.session_state["ai_message"] = None
 
 
@@ -102,22 +111,9 @@ def show_qa_flash_message():
     msg_obj = st.session_state.get("qa_message")
     if not msg_obj:
         return
-
     level, msg = msg_obj
-    if level == "success":
-        st.success(msg)
-    elif level == "warning":
-        st.warning(msg)
-    elif level == "error":
-        st.error(msg)
-    else:
-        st.info(msg)
-
+    getattr(st, level if level in ["success", "warning", "error", "info"] else "info")(msg)
     st.session_state["qa_message"] = None
-
-
-def classify_risk(preds: dict) -> str:
-    return preds.get("risk_group", "Unknown")
 
 
 def get_current_payload_from_session():
@@ -132,7 +128,17 @@ def get_current_payload_from_session():
         "Falls": st.session_state["Falls"],
         "Depression": st.session_state["Depression"],
         "Cognitive_dysfunction": st.session_state["Cognitive_dysfunction"],
+        "LEDD": float(st.session_state["LEDD"]),
     }
+
+
+def build_pending_fill_from_ai(data: dict):
+    pending_fill = {}
+    for field in REQUIRED_FIELDS:
+        value = data.get(field, None)
+        if value is not None:
+            pending_fill[field] = value
+    return pending_fill
 
 
 def show_prediction_result(result: dict):
@@ -144,18 +150,30 @@ def show_prediction_result(result: dict):
     c2.metric("5-year risk", f"{preds.get('risk_5y', 0):.4f}")
     c3.metric("7-year risk", f"{preds.get('risk_7y', 0):.4f}")
 
-    risk_label = classify_risk(preds)
+    risk_label = preds.get("risk_group", "Unknown")
     lp_cutoff = preds.get("lp_cutoff_for_risk_group")
     points_cutoff = preds.get("points_cutoff_for_risk_group")
-    st.info(f"Overall risk category: **{risk_label}**")
-    if lp_cutoff is not None and points_cutoff is not None:
-        if lp_cutoff is not None and points_cutoff is not None:
-            st.caption(f"Risk grouping follows the manuscript cutoff: total points > {points_cutoff} (equivalent LP > {lp_cutoff}) = High risk; otherwise = Low risk.")
-        else:
-            st.caption("Risk grouping cutoff is not included in the current model export; survival probabilities and mortality risks are still calculated deterministically.")
+    nomogram_points = preds.get("nomogram_points")
+
+    if risk_label == "High risk":
+        st.warning(f"Overall risk category: **{risk_label}**")
+    elif risk_label == "Low risk":
+        st.success(f"Overall risk category: **{risk_label}**")
+    else:
+        st.info(f"Overall risk category: **{risk_label}**")
+
+    if points_cutoff is not None and lp_cutoff is not None:
+        st.caption(
+            f"Risk grouping uses the exported manuscript cutoff: nomogram total points > {points_cutoff} "
+            f"(equivalent raw LP > {lp_cutoff}) = High risk; otherwise = Low risk."
+        )
+    else:
+        st.caption("Risk grouping cutoff is not included in the current model export; survival probabilities are still calculated deterministically.")
 
     rows = [
         ("Linear predictor (LP)", preds.get("linear_predictor")),
+        ("Raw linear predictor", preds.get("raw_linear_predictor")),
+        ("Nomogram-equivalent total points", nomogram_points),
         ("3-year survival probability", preds.get("survival_3y")),
         ("5-year survival probability", preds.get("survival_5y")),
         ("7-year survival probability", preds.get("survival_7y")),
@@ -163,8 +181,8 @@ def show_prediction_result(result: dict):
         ("5-year risk", preds.get("risk_5y")),
         ("7-year risk", preds.get("risk_7y")),
         ("Risk group", preds.get("risk_group")),
-        ("LP cutoff for risk grouping", preds.get("lp_cutoff_for_risk_group")),
-        ("Nomogram points cutoff for risk grouping", preds.get("points_cutoff_for_risk_group")),
+        ("LP cutoff for risk grouping", lp_cutoff),
+        ("Nomogram points cutoff for risk grouping", points_cutoff),
     ]
     df = pd.DataFrame(rows, columns=["Metric", "Value"])
     st.dataframe(df, use_container_width=True)
@@ -172,26 +190,17 @@ def show_prediction_result(result: dict):
 
 def show_explanation(result: dict):
     preds = result.get("predictions", {})
-    risk_label = classify_risk(preds)
-
+    risk_label = preds.get("risk_group", "Unknown")
     st.markdown("## 4. Basic Interpretation")
     st.write(f"Overall risk category: {risk_label}")
-    st.write("Interpretation:")
-    st.write("This result is generated by the Python implementation of the updated Cox survival model.")
-    if preds.get("lp_cutoff_for_risk_group") is not None:
-        st.write("The displayed risk group follows the cutoff exported with the model file.")
-    else:
-        st.write("The current model export provides survival probabilities and mortality risks but does not define a risk-group cutoff.")
-    st.write("This platform is for research and supportive assessment only and does not replace clinical diagnosis or treatment decisions.")
-
-
-def build_pending_fill_from_ai(data: dict):
-    pending_fill = {}
-    for field in REQUIRED_FIELDS:
-        value = data.get(field, None)
-        if value is not None:
-            pending_fill[field] = value
-    return pending_fill
+    st.write(
+        "This result is generated by a deterministic Python implementation of the final Cox survival model. "
+        "The AI module, if used, only extracts structured variables and does not calculate risk."
+    )
+    st.write(
+        "The platform is intended for research and supportive assessment only. It does not replace clinical diagnosis, "
+        "individualized prognosis discussion, or treatment decision-making by qualified clinicians."
+    )
 
 
 def render_pd_qa_panel():
@@ -229,7 +238,7 @@ def render_pd_qa_panel():
         "Ask a PD education question",
         key="qa_input",
         height=120,
-        placeholder="For example: What is Parkinson's disease? Why are falls common? What is DBS generally used for?"
+        placeholder="For example: What is Parkinson's disease? Why are falls common? What is DBS generally used for?",
     )
 
     q1, q2 = st.columns([1, 1])
@@ -248,18 +257,12 @@ def render_pd_qa_panel():
         if not qa_question.strip():
             st.session_state["qa_message"] = ("warning", "Please enter a question first.")
             st.rerun()
-
         with st.spinner("Generating an educational answer..."):
             qa_result = ask_pd_education_question(question=qa_question)
-
         if not qa_result["ok"]:
             st.session_state["qa_message"] = ("error", qa_result["error"])
             st.rerun()
-
-        st.session_state["qa_result"] = {
-            "question": qa_question.strip(),
-            "answer": qa_result["answer"].strip(),
-        }
+        st.session_state["qa_result"] = {"question": qa_question.strip(), "answer": qa_result["answer"].strip()}
         st.session_state["qa_clear_pending"] = True
         st.session_state["qa_message"] = ("success", "A new educational answer has been generated.")
         st.rerun()
@@ -272,31 +275,16 @@ def render_pd_qa_panel():
         st.markdown("### Current Q&A")
         st.markdown(
             f'''
-            <div style="
-                background:#fff7ed;
-                border:1px solid #fed7aa;
-                border-radius:12px;
-                padding:10px 12px;
-                margin:8px 0 10px 20px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-            ">
+            <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px;margin:8px 0 10px 20px;">
                 <div style="font-weight:700; margin-bottom:4px;">🧑 Question</div>
                 <div style="line-height:1.7;">{q_text}</div>
             </div>
             ''',
             unsafe_allow_html=True,
         )
-
         st.markdown(
             f'''
-            <div style="
-                background:#f0fdf4;
-                border:1px solid #bbf7d0;
-                border-radius:12px;
-                padding:10px 12px;
-                margin:8px 20px 12px 0;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-            ">
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:10px 12px;margin:8px 20px 12px 0;">
                 <div style="font-weight:700; margin-bottom:4px;">🤖 Educational Answer</div>
                 <div style="line-height:1.8;">{a_text}</div>
             </div>
@@ -304,11 +292,14 @@ def render_pd_qa_panel():
             unsafe_allow_html=True,
         )
 
-    st.info("Tip: This panel is intended for PD basics, symptom explanations, rehabilitation, caregiving, and general education. It is not a substitute for individualized diagnosis or treatment planning.")
+    st.info(
+        "Tip: This panel is intended for PD basics, symptom explanations, rehabilitation, caregiving, and general education. "
+        "It is not a substitute for individualized diagnosis or treatment planning."
+    )
 
 
 init_session_state()
-applied_now = apply_pending_fill_if_any()
+apply_pending_fill_if_any()
 
 if st.session_state["pending_predict"]:
     try:
@@ -327,7 +318,7 @@ if st.session_state["pending_predict"]:
             st.session_state["latest_payload"] = auto_payload
             st.session_state["ai_message"] = (
                 "success",
-                "AI extraction, auto-fill, and automatic prediction completed. Please review the result.",
+                "AI extraction, auto-fill, and automatic prediction completed. Please review the structured fields and result.",
             )
     except Exception as e:
         st.session_state["latest_prediction"] = None
@@ -336,10 +327,12 @@ if st.session_state["pending_predict"]:
         st.session_state["pending_predict"] = False
 
 st.title("PD Survival Risk Prediction Platform")
-st.caption("Single-app Streamlit deployment with an English interface")
+st.caption("Final 11-predictor Cox model with LEDD; English Streamlit deployment")
 
 with st.sidebar:
     st.write("Prediction engine: Python Cox model")
+    st.caption(f"Predictor set: {MODEL_EXPORT.get('selected_predictor_set_name', 'final model')}")
+    st.caption("Includes LEDD as a baseline predictor.")
     if deepseek_ready():
         st.success("DeepSeek API key detected")
     else:
@@ -350,20 +343,20 @@ main_col, qa_col = st.columns([2.2, 1], gap="large")
 
 with main_col:
     show_flash_message()
-
-    if applied_now:
-        st.info("Fields auto-filled in this round: " + ", ".join(applied_now))
-
     st.markdown("---")
-
     st.markdown("## 1. AI Smart Intake")
-    st.warning("Please enter a de-identified case summary only. Do not include name, admission number, ID number, contact details, or address information.")
+    st.warning(
+        "Please enter a de-identified case summary only. Do not include name, admission number, ID number, contact details, address information, or medical record number."
+    )
 
     case_text = st.text_area(
         "Enter a de-identified case description",
         value=st.session_state["ai_raw_text"],
         height=180,
-        placeholder="Example: Age at onset >50, disease duration at baseline 8 years, GBA1 positive, T2D positive, no DBS, UPDRS Part III 45, H&Y stage 3, falls present, no depression, no cognitive dysfunction.",
+        placeholder=(
+            "Example: Age at onset >50, disease duration at baseline 8 years, GBA1 positive, T2D positive, "
+            "no DBS, LEDD 300 mg/day, UPDRS Part III 45, H&Y stage 3, falls present, no depression, no cognitive dysfunction."
+        ),
     )
     st.session_state["ai_raw_text"] = case_text
 
@@ -377,7 +370,6 @@ with main_col:
         if not case_text.strip():
             st.session_state["ai_message"] = ("error", "Please enter a case description first.")
             st.rerun()
-
         if not deepseek_ready():
             st.session_state["ai_message"] = ("error", "DeepSeek API key was not detected. AI extraction is currently unavailable.")
             st.rerun()
@@ -412,46 +404,40 @@ with main_col:
                 if data.get("missing_fields"):
                     msg += f" Missing fields: {', '.join(data['missing_fields'])}. Risk prediction cannot be completed yet."
                 st.session_state["ai_message"] = ("warning", msg)
-
         st.rerun()
 
     if st.session_state["ai_result"] is not None:
         data = st.session_state["ai_result"]
         st.markdown("### Most Recent AI Extraction Result")
         st.json(data)
-
         if data["can_predict"]:
-            st.success("All fields are complete. You may click Predict manually or use the one-click AI extract, fill, and predict workflow.")
+            st.success("All fields are complete. Please review the structured fields before prediction.")
         else:
             st.warning("Information is still incomplete. The system will not guess or fabricate missing fields.")
-
         if data.get("missing_fields"):
             st.error("Missing fields: " + ", ".join(data["missing_fields"]))
         if data.get("uncertainties"):
             st.info("Uncertain fields: " + ", ".join(data["uncertainties"]))
 
     st.markdown("---")
-
     st.markdown("## 2. Structured Variable Input")
 
     col1, col2 = st.columns(2)
     with col1:
-        age = st.selectbox("Age at onset", ["≤50", ">50"], key="Age_at_onset")
+        age = st.selectbox(DISPLAY_NAMES["Age_at_onset"], ["≤50", ">50"], key="Age_at_onset")
         disease_duration_baseline = st.number_input(
-            "Disease duration at baseline (years)",
-            min_value=0.0,
-            step=0.5,
-            key="disease_duration_baseline"
+            DISPLAY_NAMES["disease_duration_baseline"], min_value=0.0, step=0.5, key="disease_duration_baseline"
         )
-        gba1 = st.selectbox("GBA1 mutation", ["No", "Yes"], key="GBA1_mutation")
-        t2d = st.selectbox("T2D", ["No", "Yes"], key="T2D")
-        dbs = st.selectbox("DBS", ["No", "Yes"], key="DBS")
+        gba1 = st.selectbox(DISPLAY_NAMES["GBA1_mutation"], ["No", "Yes"], key="GBA1_mutation")
+        t2d = st.selectbox(DISPLAY_NAMES["T2D"], ["No", "Yes"], key="T2D")
+        dbs = st.selectbox(DISPLAY_NAMES["DBS"], ["No", "Yes"], key="DBS")
+        ledd = st.number_input(DISPLAY_NAMES["LEDD"], min_value=0.0, step=50.0, key="LEDD")
     with col2:
-        updrs = st.number_input("UPDRS Part III", min_value=0.0, step=1.0, key="UPDRS_Part_III")
-        hy = st.selectbox("H&Y Stage", ["1", "2", "2.5", "3", "4", "5"], key="HY_Stage")
-        falls = st.selectbox("Falls", ["No", "Yes"], key="Falls")
-        depression = st.selectbox("Depression", ["No", "Yes"], key="Depression")
-        cog = st.selectbox("Cognitive dysfunction", ["No", "Yes"], key="Cognitive_dysfunction")
+        updrs = st.number_input(DISPLAY_NAMES["UPDRS_Part_III"], min_value=0.0, step=1.0, key="UPDRS_Part_III")
+        hy = st.selectbox(DISPLAY_NAMES["HY_Stage"], ["1", "2", "2.5", "3", "4", "5"], key="HY_Stage")
+        falls = st.selectbox(DISPLAY_NAMES["Falls"], ["No", "Yes"], key="Falls")
+        depression = st.selectbox(DISPLAY_NAMES["Depression"], ["No", "Yes"], key="Depression")
+        cog = st.selectbox(DISPLAY_NAMES["Cognitive_dysfunction"], ["No", "Yes"], key="Cognitive_dysfunction")
 
     payload = {
         "Age_at_onset": age,
@@ -464,6 +450,7 @@ with main_col:
         "Falls": falls,
         "Depression": depression,
         "Cognitive_dysfunction": cog,
+        "LEDD": float(ledd),
     }
 
     if st.button("Start prediction", type="primary"):
@@ -491,4 +478,7 @@ with qa_col:
     render_pd_qa_panel()
 
 st.markdown("---")
-st.caption("Note: AI is used for structured extraction and patient education only. Risk values are calculated by the Python implementation of the updated Cox model. Risk grouping is displayed only when a cutoff is included in the model JSON.")
+st.caption(
+    "Note: AI is used for structured extraction and patient education only. Risk values are calculated by the Python implementation of the final 11-predictor Cox model. "
+    "Risk grouping is displayed only when a cutoff is included in the model JSON."
+)

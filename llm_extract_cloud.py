@@ -23,7 +23,20 @@ REQUIRED_FIELDS = [
     "Falls",
     "Depression",
     "Cognitive_dysfunction",
+    "LEDD",
 ]
+
+NUMERIC_FIELDS = ["disease_duration_baseline", "UPDRS_Part_III", "LEDD"]
+ALLOWED_LEVELS = {
+    "Age_at_onset": ["≤50", ">50"],
+    "GBA1_mutation": ["No", "Yes"],
+    "T2D": ["No", "Yes"],
+    "DBS": ["No", "Yes"],
+    "HY_Stage": ["1", "2", "2.5", "3", "4", "5"],
+    "Falls": ["No", "Yes"],
+    "Depression": ["No", "Yes"],
+    "Cognitive_dysfunction": ["No", "Yes"],
+}
 
 
 def _strip_code_fence(text: str) -> str:
@@ -38,34 +51,44 @@ def _safe_json_loads(text: str) -> Dict[str, Any]:
     return json.loads(_strip_code_fence(text))
 
 
-def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
-    result = {
-        "Age_at_onset": data.get("Age_at_onset"),
-        "disease_duration_baseline": data.get("disease_duration_baseline"),
-        "GBA1_mutation": data.get("GBA1_mutation"),
-        "T2D": data.get("T2D"),
-        "DBS": data.get("DBS"),
-        "UPDRS_Part_III": data.get("UPDRS_Part_III"),
-        "HY_Stage": data.get("HY_Stage"),
-        "Falls": data.get("Falls"),
-        "Depression": data.get("Depression"),
-        "Cognitive_dysfunction": data.get("Cognitive_dysfunction"),
-        "missing_fields": data.get("missing_fields", []),
-        "uncertainties": data.get("uncertainties", []),
-        "can_predict": bool(data.get("can_predict", False)),
-    }
+def _to_float_or_none(value: Any):
+    if value in [None, "", []]:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().replace(",", "")
+        match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
+        if match:
+            return float(match.group(0))
+        return value
+    try:
+        return float(value)
+    except Exception:
+        return value
 
-    for num_field in ["disease_duration_baseline", "UPDRS_Part_III"]:
-        if result.get(num_field) in ["", []]:
-            result[num_field] = None
-        elif result.get(num_field) is not None:
-            try:
-                result[num_field] = float(result[num_field])
-            except Exception:
-                pass
+
+def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
+    result = {field: data.get(field) for field in REQUIRED_FIELDS}
+    result["missing_fields"] = data.get("missing_fields", []) or []
+    result["uncertainties"] = data.get("uncertainties", []) or []
+
+    for field in NUMERIC_FIELDS:
+        result[field] = _to_float_or_none(result.get(field))
+
+    for field, levels in ALLOWED_LEVELS.items():
+        value = result.get(field)
+        if value in [None, "", []]:
+            result[field] = None
+        else:
+            value = str(value).strip()
+            if value not in levels:
+                result["uncertainties"].append(f"{field}: unsupported value '{value}'")
+                result[field] = None
+            else:
+                result[field] = value
 
     missing = [k for k in REQUIRED_FIELDS if result.get(k) in [None, "", []]]
     result["missing_fields"] = sorted(list(set(result.get("missing_fields", []) + missing)))
+    result["uncertainties"] = sorted(list(set(result.get("uncertainties", []))))
     result["can_predict"] = len(result["missing_fields"]) == 0
     return result
 
