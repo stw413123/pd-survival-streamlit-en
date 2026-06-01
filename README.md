@@ -1,38 +1,67 @@
-# PD Survival Risk Prediction Platform - final 11-predictor Cox model
+# PD Survival Risk Prediction Platform — MI20 Pooled Cox Deployment Bundle
 
-This bundle is ready to upload to GitHub and deploy on Streamlit Cloud.
+This repository bundle is ready for direct upload to GitHub and deployment on Streamlit Community Cloud.
 
-## Main update
-This version uses the updated final Cox model export with 11 baseline predictors, including LEDD:
+## Final deployed prediction engine
 
-- Age at onset
-- Disease duration at baseline
-- GBA1 mutation status
-- Type 2 diabetes status
-- DBS status at baseline
-- UPDRS Part III score
-- H&Y stage
-- History of falls
-- Depression
-- Cognitive dysfunction
-- LEDD (mg/day)
+The website uses a **deterministic Cox proportional hazards model pooled across 20 multiply imputed datasets**. The exported JSON file contains the pooled coefficients, baseline survival estimates at 3, 5, and 7 years, and the supportive risk-stratification cutoff.
 
-The prediction engine reads the updated JSON directly, computes the raw Cox linear predictor, 3-/5-/7-year survival probabilities and risks, and applies the exported risk-stratification cutoff when available.
+The final model includes 11 baseline predictors:
 
-## Files
-- `streamlit_app.py`: Streamlit user interface
-- `predictor_fit10_python.py`: deterministic Cox prediction engine compatible with the updated 11-predictor JSON
-- `fit10_export_for_python.json`: updated Cox model export from R
-- `llm_extract_cloud.py`: DeepSeek-assisted structured variable extraction, now including LEDD
-- `llm_chat_cloud.py`: DeepSeek-assisted PD education Q&A
-- `cloud_config.py`: Streamlit secrets / environment variable config
-- `prompts.py`: LLM prompts
-- `requirements.txt`: Python dependencies
+1. Age at onset  
+2. Disease duration at baseline  
+3. GBA1 mutation status  
+4. Type 2 diabetes status  
+5. DBS status at baseline  
+6. UPDRS Part III score  
+7. H&Y stage  
+8. History of falls  
+9. Depression  
+10. Cognitive dysfunction  
+11. LEDD (mg/day)
 
-## Deployment steps
-1. Upload all files in this folder to the root directory of your GitHub repository.
-2. In Streamlit Cloud, set the app entry file to `streamlit_app.py`.
-3. Add DeepSeek secrets if AI extraction/Q&A is needed:
+## Prediction outputs
+
+The platform provides:
+
+- 3-year, 5-year, and 7-year predicted risk;
+- corresponding predicted survival probabilities;
+- raw Cox linear predictor;
+- nomogram-equivalent total points;
+- supportive high-/low-risk stratification using the cutoff exported from R.
+
+The displayed risk-stratification category is for supportive interpretation only and is **not** an independent treatment-decision threshold.
+
+## AI-assisted modules
+
+The DeepSeek modules operate independently from the deterministic prediction engine:
+
+- **Structured intake:** extracts the predefined model variables from a de-identified case summary and identifies missing or uncertain fields.
+- **PD Education Q&A:** provides general educational information about Parkinson's disease.
+
+The LLM does **not** perform imputation, model fitting, coefficient estimation, survival probability calculation, or risk stratification.
+
+## Files to upload to GitHub
+
+Upload all files in this folder to the repository root:
+
+- `streamlit_app.py` — Streamlit user interface
+- `predictor_fit10_python.py` — deterministic MI20 pooled Cox prediction engine
+- `fit10_export_for_python.json` — final pooled Cox JSON exported from R
+- `llm_extract_cloud.py` — DeepSeek-assisted structured-variable extraction
+- `llm_chat_cloud.py` — DeepSeek-assisted PD education Q&A
+- `cloud_config.py` — Streamlit secrets/environment variable handling
+- `prompts.py` — constrained LLM prompts
+- `requirements.txt` — Python dependencies
+- `.gitignore` — prevents secrets from being uploaded
+
+The filename `fit10_export_for_python.json` is retained for compatibility with the existing application import path, although the deployed model now contains 11 predictors and is pooled after multiple imputation.
+
+## Streamlit Cloud deployment
+
+1. Replace the existing repository files with the files in this bundle and commit the changes.
+2. In Streamlit Community Cloud, deploy or reboot the app with `streamlit_app.py` as the entry file.
+3. In the Streamlit app settings, add secrets only if the AI-assisted modules are required:
 
 ```toml
 DEEPSEEK_API_KEY = "your_key_here"
@@ -41,10 +70,12 @@ DEEPSEEK_MODEL = "deepseek-chat"
 LLM_TIMEOUT = "45"
 ```
 
-Do not upload your real API key to GitHub.
+Never upload your real API key to GitHub.
 
-## Important notes
-- This platform is for research and supportive assessment only.
-- The AI modules are used only for structured extraction and general PD education.
-- The AI modules do not train the model, impute missing values, or calculate risk.
-- Risk calculation is deterministic and uses the exported Cox coefficients and baseline survival values.
+## Model provenance statement for the manuscript
+
+Individualized survival estimates in the web platform are calculated deterministically using regression coefficients and baseline survival estimates exported from the final Cox proportional hazards model pooled across 20 multiply imputed datasets. DeepSeek-assisted modules are used only for structured extraction from de-identified case summaries and general patient education; they are independent of the prediction engine.
+
+## Intended use
+
+This platform is for research and supportive risk assessment only. It does not replace clinical evaluation, individualized prognostic discussion, or treatment decision-making by qualified clinicians.
