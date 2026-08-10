@@ -18,7 +18,14 @@ with MODEL_PATH.open("r", encoding="utf-8") as f:
 
 COEFS = MODEL_EXPORT["coefficients"]
 FACTOR_LEVELS = MODEL_EXPORT.get("factor_levels", {})
-HORIZONS = [int(x) for x in MODEL_EXPORT.get("horizons_years", [2, 4, 6])]
+EXPECTED_HORIZONS = [2, 4, 6]
+HORIZONS = [int(x) for x in MODEL_EXPORT.get("horizons_years", [])]
+if HORIZONS != EXPECTED_HORIZONS:
+    raise ValueError(
+        "Wrong model JSON loaded: expected horizons_years = [2, 4, 6], "
+        f"but found {HORIZONS}. Please replace fit10_export_for_python.json "
+        "in the GitHub repository root with the final MI20 pooled Cox JSON."
+    )
 REQUIRED_FIELDS = list(MODEL_EXPORT.get("predictors", []))
 NUMERIC_FIELDS = [field for field in REQUIRED_FIELDS if field not in FACTOR_LEVELS]
 

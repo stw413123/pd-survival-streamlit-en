@@ -2,11 +2,27 @@
   "model_type": "Cox proportional hazards model pooled after multiple imputation",
   "time_origin": "baseline / cohort entry",
   "outcome": "all-cause mortality",
-  "horizons_years": [2, 4, 6],
+  "horizons_years": [
+    2,
+    4,
+    6
+  ],
   "imputation_method": "Multiple imputation by chained equations",
   "number_of_imputations": 20,
   "selected_predictor_set_name": "fit_final_10_plus_LEDD",
-  "predictors": ["Age_at_onset", "disease_duration_baseline", "GBA1_mutation", "T2D", "DBS", "UPDRS_Part_III", "HY_Stage", "Falls", "Depression", "Cognitive_dysfunction", "LEDD"],
+  "predictors": [
+    "Age_at_onset",
+    "disease_duration_baseline",
+    "GBA1_mutation",
+    "T2D",
+    "DBS",
+    "UPDRS_Part_III",
+    "HY_Stage",
+    "Falls",
+    "Depression",
+    "Cognitive_dysfunction",
+    "LEDD"
+  ],
   "coefficients": {
     "Age_at_onset>50": 0.9673850380063,
     "disease_duration_baseline": 0.01952355017218,
@@ -25,14 +41,42 @@
     "LEDD": 0.0003073349449863
   },
   "factor_levels": {
-    "Age_at_onset": ["≤50", ">50"],
-    "GBA1_mutation": ["No", "Yes"],
-    "T2D": ["No", "Yes"],
-    "DBS": ["No", "Yes"],
-    "HY_Stage": ["1", "2", "2.5", "3", "4", "5"],
-    "Falls": ["No", "Yes"],
-    "Depression": ["No", "Yes"],
-    "Cognitive_dysfunction": ["No", "Yes"]
+    "Age_at_onset": [
+      "≤50",
+      ">50"
+    ],
+    "GBA1_mutation": [
+      "No",
+      "Yes"
+    ],
+    "T2D": [
+      "No",
+      "Yes"
+    ],
+    "DBS": [
+      "No",
+      "Yes"
+    ],
+    "HY_Stage": [
+      "1",
+      "2",
+      "2.5",
+      "3",
+      "4",
+      "5"
+    ],
+    "Falls": [
+      "No",
+      "Yes"
+    ],
+    "Depression": [
+      "No",
+      "Yes"
+    ],
+    "Cognitive_dysfunction": [
+      "No",
+      "Yes"
+    ]
   },
   "baseline_cumulative_hazard": [
     {
@@ -2121,5 +2165,7 @@
     "note": "The cutoff is for supportive risk stratification only and should not be used as an independent treatment decision threshold."
   },
   "formula": "Surv(Time_ml, Status) ~ Age_at_onset + disease_duration_baseline +      GBA1_mutation + T2D + DBS + UPDRS_Part_III + HY_Stage + Falls +      Depression + Cognitive_dysfunction + LEDD",
-  "note": "Survival probability can be calculated as S0(t)^exp(lp), where lp is the raw Cox linear predictor based on pooled coefficients after multiple imputation."
+  "note": "Survival probability can be calculated as S0(t)^exp(lp), where lp is the raw Cox linear predictor based on pooled coefficients after multiple imputation.",
+  "deployment_version": "reviewer_revision_260810_final_MI20_2_4_6",
+  "deployment_note": "Final MI20 pooled Cox model for Streamlit deployment; expected horizons are 2, 4, and 6 years."
 }
