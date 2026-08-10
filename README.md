@@ -1,10 +1,10 @@
-# PD Survival Risk Prediction Platform — MI20 Pooled Cox Deployment Bundle
+# PD Survival Risk Prediction Platform — Reviewer-Revision Deployment Bundle
 
-This repository bundle is ready for direct upload to GitHub and deployment on Streamlit Community Cloud.
+This repository bundle is ready for upload to GitHub and deployment on Streamlit Community Cloud.
 
 ## Final deployed prediction engine
 
-The website uses a **deterministic Cox proportional hazards model pooled across 20 multiply imputed datasets**. The exported JSON file contains the pooled coefficients, baseline survival estimates at 3, 5, and 7 years, and the supportive risk-stratification cutoff.
+The website uses a **deterministic Cox proportional hazards model pooled across 20 multiply imputed datasets**. The exported JSON file contains the pooled coefficients, factor codings, and baseline survival estimates at **2, 4, and 6 years**.
 
 The final model includes 11 baseline predictors:
 
@@ -22,15 +22,14 @@ The final model includes 11 baseline predictors:
 
 ## Prediction outputs
 
-The platform provides:
+The platform provides continuous model-based estimates only:
 
-- 3-year, 5-year, and 7-year predicted risk;
+- 2-year, 4-year, and 6-year predicted mortality risk;
 - corresponding predicted survival probabilities;
 - raw Cox linear predictor;
-- nomogram-equivalent total points;
-- supportive high-/low-risk stratification using the cutoff exported from R.
+- nomogram-equivalent total points.
 
-The displayed risk-stratification category is for supportive interpretation only and is **not** an independent treatment-decision threshold.
+The web interface **does not display low-/high-risk labels**. Any cutoff exported from the R model is retained only for manuscript-level descriptive plots and is not an independent treatment-decision threshold.
 
 ## AI-assisted modules
 
@@ -39,7 +38,13 @@ The DeepSeek modules operate independently from the deterministic prediction eng
 - **Structured intake:** extracts the predefined model variables from a de-identified case summary and identifies missing or uncertain fields.
 - **PD Education Q&A:** provides general educational information about Parkinson's disease.
 
-The LLM does **not** perform imputation, model fitting, coefficient estimation, survival probability calculation, or risk stratification.
+The LLM does **not** perform imputation, model fitting, coefficient estimation, baseline hazard estimation, survival probability calculation, or risk stratification. All AI-extracted values must be reviewed and confirmed by the user before prediction can be run.
+
+## Privacy and data handling
+
+Users are instructed to enter **de-identified text only**. The interface explicitly prohibits names, ID numbers, dates of birth, addresses, phone numbers, admission numbers, medical record numbers, and other direct identifiers.
+
+For AI-assisted extraction, only the de-identified case summary and the extraction prompt are sent to the configured DeepSeek API endpoint. The structured registry dataset, survival outcomes, Cox coefficients, baseline hazard, and final risk estimates are not sent to the AI service. This Streamlit app does not intentionally write submitted summaries, extracted variables, or prediction results to local files. Data handling by the external API provider follows the provider's applicable service terms and privacy policy.
 
 ## Files to upload to GitHub
 
@@ -55,7 +60,7 @@ Upload all files in this folder to the repository root:
 - `requirements.txt` — Python dependencies
 - `.gitignore` — prevents secrets from being uploaded
 
-The filename `fit10_export_for_python.json` is retained for compatibility with the existing application import path, although the deployed model now contains 11 predictors and is pooled after multiple imputation.
+The filename `fit10_export_for_python.json` is retained for compatibility with the existing application import path.
 
 ## Streamlit Cloud deployment
 
@@ -74,7 +79,7 @@ Never upload your real API key to GitHub.
 
 ## Model provenance statement for the manuscript
 
-Individualized survival estimates in the web platform are calculated deterministically using regression coefficients and baseline survival estimates exported from the final Cox proportional hazards model pooled across 20 multiply imputed datasets. DeepSeek-assisted modules are used only for structured extraction from de-identified case summaries and general patient education; they are independent of the prediction engine.
+Individualized survival estimates in the web platform are calculated deterministically using regression coefficients and baseline survival estimates exported from the final Cox proportional hazards model pooled across 20 multiply imputed datasets. DeepSeek-assisted modules are used only for structured extraction from de-identified case summaries and general patient education; they are independent of the prediction engine and require user review and confirmation before prediction.
 
 ## Intended use
 

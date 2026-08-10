@@ -86,6 +86,12 @@ def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 result[field] = value
 
+    for field in NUMERIC_FIELDS:
+        value = result.get(field)
+        if value is not None and not isinstance(value, (int, float)):
+            result["uncertainties"].append(f"{field}: unsupported numeric value '{value}'")
+            result[field] = None
+
     missing = [k for k in REQUIRED_FIELDS if result.get(k) in [None, "", []]]
     result["missing_fields"] = sorted(list(set(result.get("missing_fields", []) + missing)))
     result["uncertainties"] = sorted(list(set(result.get("uncertainties", []))))
@@ -94,14 +100,32 @@ def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def extract_variables_from_text(case_text: str) -> Dict[str, Any]:
+    """Extract structured model variables from de-identified text.
+
+    Only the system prompt and user-provided de-identified case summary are sent
+    to the external API. The deterministic Cox model JSON, model coefficients,
+    survival outcomes, and risk estimates are not sent to the AI service.
+    """
     if not DEEPSEEK_API_KEY:
-        return {"ok": False, "error": "DeepSeek API key was not detected in Streamlit secrets or environment variables.", "data": None}
+        return {
+            "ok": False,
+            "error": "DeepSeek API key was not detected in Streamlit secrets or environment variables.",
+            "data": None,
+            "model": DEEPSEEK_MODEL,
+        }
 
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Extract the PD survival model variables from the de-identified case summary below. Do not calculate risk:\n\n{case_text.strip()}"},
+            {
+                "role": "user",
+                "content": (
+                    "Extract the PD survival model variables from the de-identified case summary below. "
+                    "Do not calculate risk. Return valid JSON only.\n\n"
+                    f"{case_text.strip()}"
+                ),
+            },
         ],
         "temperature": 0,
         "stream": False,
@@ -120,8 +144,13 @@ def extract_variables_from_text(case_text: str) -> Dict[str, Any]:
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
         parsed = _safe_json_loads(content)
-        return {"ok": True, "error": None, "data": _normalize_output(parsed)}
+        return {"ok": True, "error": None, "data": _normalize_output(parsed), "model": DEEPSEEK_MODEL}
     except requests.HTTPError as e:
-        return {"ok": False, "error": f"DeepSeek API error: {str(e)}; response: {getattr(e.response, 'text', '')[:500]}", "data": None}
+        return {
+            "ok": False,
+            "error": f"DeepSeek API error: {str(e)}; response: {getattr(e.response, 'text', '')[:500]}",
+            "data": None,
+            "model": DEEPSEEK_MODEL,
+        }
     except Exception as e:
-        return {"ok": False, "error": f"AI extraction failed: {str(e)}", "data": None}
+        return {"ok": False, "error": f"AI extraction failed: {str(e)}", "data": None, "model": DEEPSEEK_MODEL}

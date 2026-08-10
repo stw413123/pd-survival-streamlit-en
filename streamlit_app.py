@@ -2,7 +2,7 @@ import html
 import pandas as pd
 import streamlit as st
 
-from cloud_config import deepseek_ready
+from cloud_config import DEEPSEEK_MODEL, deepseek_ready
 from llm_extract_cloud import extract_variables_from_text
 from llm_chat_cloud import ask_pd_education_question
 from predictor_fit10_python import MODEL_EXPORT, model_summary, predict_fit10_python, validate_payload
@@ -61,16 +61,17 @@ def init_session_state():
 
     defaults = {
         "ai_result": None,
+        "ai_model_used": None,
         "ai_raw_text": "",
         "ai_message": None,
         "pending_fill": None,
-        "pending_predict": False,
         "latest_prediction": None,
         "latest_payload": None,
         "qa_input": "",
         "qa_message": None,
         "qa_result": None,
         "qa_clear_pending": False,
+        "review_confirmed": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -95,6 +96,7 @@ def apply_pending_fill_if_any():
         changed.append(field)
 
     st.session_state["pending_fill"] = None
+    st.session_state["review_confirmed"] = False
     return changed
 
 
@@ -114,22 +116,6 @@ def show_qa_flash_message():
     level, msg = msg_obj
     getattr(st, level if level in ["success", "warning", "error", "info"] else "info")(msg)
     st.session_state["qa_message"] = None
-
-
-def get_current_payload_from_session():
-    return {
-        "Age_at_onset": st.session_state["Age_at_onset"],
-        "disease_duration_baseline": float(st.session_state["disease_duration_baseline"]),
-        "GBA1_mutation": st.session_state["GBA1_mutation"],
-        "T2D": st.session_state["T2D"],
-        "DBS": st.session_state["DBS"],
-        "UPDRS_Part_III": float(st.session_state["UPDRS_Part_III"]),
-        "HY_Stage": st.session_state["HY_Stage"],
-        "Falls": st.session_state["Falls"],
-        "Depression": st.session_state["Depression"],
-        "Cognitive_dysfunction": st.session_state["Cognitive_dysfunction"],
-        "LEDD": float(st.session_state["LEDD"]),
-    }
 
 
 def build_pending_fill_from_ai(data: dict):
@@ -155,59 +141,42 @@ def _fmt_number(value, digits=3):
 
 def show_prediction_result(result: dict):
     preds = result.get("predictions", {})
+    horizons = result.get("model", {}).get("horizons_years", [2, 4, 6])
 
     st.markdown("## 3. Prediction Results")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("3-year risk", _fmt_probability(preds.get("risk_3y")))
-    c2.metric("5-year risk", _fmt_probability(preds.get("risk_5y")))
-    c3.metric("7-year risk", _fmt_probability(preds.get("risk_7y")))
+    st.info(
+        "The web interface reports continuous survival probabilities and mortality risks at the model horizons. "
+        "It does not assign a low/high clinical risk label."
+    )
 
-    risk_label = preds.get("risk_group", "Unknown")
-    lp_cutoff = preds.get("lp_cutoff_for_risk_group")
-    points_cutoff = preds.get("points_cutoff_for_risk_group")
-    nomogram_points = preds.get("nomogram_points")
-
-    if risk_label == "High risk":
-        st.warning(f"Risk-stratification category: **{risk_label}**")
-    elif risk_label == "Low risk":
-        st.success(f"Risk-stratification category: **{risk_label}**")
-    else:
-        st.info(f"Risk-stratification category: **{risk_label}**")
-
-    if points_cutoff is not None and lp_cutoff is not None:
-        st.caption(
-            f"Supportive risk stratification uses the exported cutoff: total points > {points_cutoff:.2f} "
-            f"(equivalent raw LP > {lp_cutoff:.4f}) = High risk; otherwise = Low risk. "
-            "This threshold is not an independent treatment-decision threshold."
-        )
+    cols = st.columns(len(horizons))
+    for col, horizon in zip(cols, horizons):
+        col.metric(f"{horizon}-year mortality risk", _fmt_probability(preds.get(f"risk_{horizon}y")))
 
     rows = [
-        ("Raw linear predictor (LP)", _fmt_number(preds.get("raw_linear_predictor"), 4)),
-        ("Nomogram-equivalent total points", _fmt_number(nomogram_points, 2)),
-        ("3-year survival probability", _fmt_probability(preds.get("survival_3y"))),
-        ("5-year survival probability", _fmt_probability(preds.get("survival_5y"))),
-        ("7-year survival probability", _fmt_probability(preds.get("survival_7y"))),
-        ("3-year risk", _fmt_probability(preds.get("risk_3y"))),
-        ("5-year risk", _fmt_probability(preds.get("risk_5y"))),
-        ("7-year risk", _fmt_probability(preds.get("risk_7y"))),
-        ("Risk-stratification category", risk_label),
+        ("Raw Cox linear predictor", _fmt_number(preds.get("raw_linear_predictor"), 4)),
+        ("Nomogram-equivalent total points", _fmt_number(preds.get("nomogram_points"), 2)),
+        ("Relative hazard versus LP=0", _fmt_number(preds.get("relative_hazard_vs_lp0"), 4)),
     ]
+    for horizon in horizons:
+        rows.append((f"{horizon}-year survival probability", _fmt_probability(preds.get(f"survival_{horizon}y"))))
+        rows.append((f"{horizon}-year mortality risk", _fmt_probability(preds.get(f"risk_{horizon}y"))))
+
     df = pd.DataFrame(rows, columns=["Metric", "Value"])
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def show_explanation(result: dict):
-    preds = result.get("predictions", {})
-    risk_label = preds.get("risk_group", "Unknown")
     st.markdown("## 4. Basic Interpretation")
-    st.write(f"Overall risk category: {risk_label}")
     st.write(
-        "This result is generated deterministically from the final Cox model pooled across 20 multiply imputed datasets. "
-        "The AI module, if used, only extracts structured variables and does not calculate risk."
+        "This result is generated deterministically from the final Cox proportional hazards model pooled across "
+        "20 multiply imputed datasets. The AI module, if used, only pre-fills structured variables and does not "
+        "perform survival probability calculation."
     )
     st.write(
-        "The platform is intended for research and supportive assessment only. It does not replace clinical diagnosis, "
-        "individualized prognosis discussion, or treatment decision-making by qualified clinicians."
+        "Any manuscript-level cutoff is retained only for descriptive plots and is not displayed here as a clinical "
+        "decision label. The platform is intended for research and supportive assessment only; it does not replace "
+        "clinical diagnosis, individualized prognosis discussion, or treatment decision-making by qualified clinicians."
     )
 
 
@@ -229,7 +198,7 @@ def render_pd_qa_panel():
                 💬 PD Education Q&amp;A
             </div>
             <div style="color: #4b5563; font-size: 14px; line-height: 1.6;">
-                For Parkinson's disease health education only. Not a substitute for diagnosis, medication adjustment, or urgent clinical care.
+                General Parkinson's disease education only. Not a substitute for diagnosis, medication adjustment, or urgent clinical care.
             </div>
         </div>
         ''',
@@ -309,42 +278,18 @@ def render_pd_qa_panel():
 init_session_state()
 apply_pending_fill_if_any()
 
-if st.session_state["pending_predict"]:
-    try:
-        auto_payload = get_current_payload_from_session()
-        missing_after_fill = validate_payload(auto_payload)
-        if missing_after_fill:
-            st.session_state["latest_prediction"] = None
-            st.session_state["latest_payload"] = auto_payload
-            st.session_state["ai_message"] = (
-                "warning",
-                f"AI completed auto-fill, but these fields are still missing: {', '.join(missing_after_fill)}. Automatic prediction could not be completed.",
-            )
-        else:
-            auto_result = predict_fit10_python(auto_payload)
-            st.session_state["latest_prediction"] = auto_result
-            st.session_state["latest_payload"] = auto_payload
-            st.session_state["ai_message"] = (
-                "success",
-                "AI extraction, auto-fill, and automatic prediction completed. Please review the structured fields and result.",
-            )
-    except Exception as e:
-        st.session_state["latest_prediction"] = None
-        st.session_state["ai_message"] = ("error", f"Automatic prediction failed: {str(e)}")
-    finally:
-        st.session_state["pending_predict"] = False
-
 st.title("PD Survival Risk Prediction Platform")
-st.caption("Final 11-predictor pooled Cox model after multiple imputation (m = 20), including baseline LEDD")
+st.caption("Final 11-predictor pooled Cox model after multiple imputation (m = 20), reporting 2-, 4-, and 6-year estimates")
 
 with st.sidebar:
     summary = model_summary()
     st.write("Prediction engine: deterministic pooled Cox model")
     st.caption(f"Multiple imputation: m = {summary.get('number_of_imputations', 'NA')}")
+    st.caption(f"Prediction horizons: {', '.join(str(h) + '-year' for h in summary.get('horizons_years', []))}")
     st.caption(f"Predictor set: {summary.get('predictor_set', 'final model')}")
     st.caption("11 baseline predictors, including LEDD.")
     if deepseek_ready():
-        st.success("DeepSeek API key detected")
+        st.success(f"DeepSeek API key detected; configured model: {DEEPSEEK_MODEL}")
     else:
         st.warning("DeepSeek API key not detected; AI features are unavailable")
     st.info("Please enter de-identified case summaries only.")
@@ -356,8 +301,23 @@ with main_col:
     st.markdown("---")
     st.markdown("## 1. AI Smart Intake")
     st.warning(
-        "Please enter a de-identified case summary only. Do not include name, admission number, ID number, contact details, address information, or medical record number."
+        "Please enter a de-identified case summary only. Do not include names, ID numbers, dates of birth, "
+        "admission numbers, contact details, addresses, medical record numbers, or other direct identifiers."
     )
+    st.caption(
+        "AI-assisted extraction is used only to pre-fill the 11 structured predictors. "
+        "The user must review and confirm all fields before prediction. The Cox model performs the final risk calculation."
+    )
+
+    with st.expander("Data sent to the external AI service and privacy safeguards"):
+        st.write(
+            "For AI-assisted extraction, only the de-identified case summary and the extraction prompt are sent to the configured DeepSeek API endpoint. "
+            "The structured registry database, survival outcomes, Cox coefficients, baseline hazard, and final risk estimates are not sent to the AI service."
+        )
+        st.write(
+            "This Streamlit app does not intentionally write submitted summaries, extracted variables, or prediction results to local files. "
+            "Data handling by the external API provider follows the provider's applicable service terms and privacy policy."
+        )
 
     case_text = st.text_area(
         "Enter a de-identified case description",
@@ -370,13 +330,9 @@ with main_col:
     )
     st.session_state["ai_raw_text"] = case_text
 
-    col_ai1, col_ai2 = st.columns(2)
-    with col_ai1:
-        btn_fill_only = st.button("AI extract and auto-fill")
-    with col_ai2:
-        btn_fill_and_predict = st.button("AI extract, auto-fill, and predict")
+    btn_fill_only = st.button("AI extract and auto-fill", use_container_width=False)
 
-    if btn_fill_only or btn_fill_and_predict:
+    if btn_fill_only:
         if not case_text.strip():
             st.session_state["ai_message"] = ("error", "Please enter a case description first.")
             st.rerun()
@@ -389,41 +345,38 @@ with main_col:
 
         if not ai_result["ok"]:
             st.session_state["ai_result"] = None
+            st.session_state["ai_model_used"] = ai_result.get("model")
             st.session_state["ai_message"] = ("error", ai_result["error"])
             st.rerun()
 
         data = ai_result["data"]
         st.session_state["ai_result"] = data
+        st.session_state["ai_model_used"] = ai_result.get("model")
         st.session_state["pending_fill"] = build_pending_fill_from_ai(data)
+        st.session_state["review_confirmed"] = False
 
-        if btn_fill_and_predict:
-            st.session_state["pending_predict"] = True
-            if data["can_predict"]:
-                st.session_state["ai_message"] = ("success", "AI extraction completed. The page will refresh and run auto-fill plus automatic prediction.")
-            else:
-                msg = "AI extraction completed. The page will refresh and auto-fill the recognized fields."
-                if data.get("missing_fields"):
-                    msg += f" Missing fields: {', '.join(data['missing_fields'])}. Automatic prediction cannot be completed."
-                st.session_state["ai_message"] = ("warning", msg)
+        if data["can_predict"]:
+            st.session_state["ai_message"] = (
+                "success",
+                "AI extraction completed and fields will be pre-filled. Please review and confirm all structured fields before prediction.",
+            )
         else:
-            st.session_state["pending_predict"] = False
-            if data["can_predict"]:
-                st.session_state["ai_message"] = ("success", "AI extraction completed. The page will refresh and auto-fill all fields. Please review them and click Predict.")
-            else:
-                msg = "AI extraction completed. The page will refresh and auto-fill the recognized fields."
-                if data.get("missing_fields"):
-                    msg += f" Missing fields: {', '.join(data['missing_fields'])}. Risk prediction cannot be completed yet."
-                st.session_state["ai_message"] = ("warning", msg)
+            msg = "AI extraction completed and recognized fields will be pre-filled. The system will not guess missing information."
+            if data.get("missing_fields"):
+                msg += f" Missing fields: {', '.join(data['missing_fields'])}."
+            st.session_state["ai_message"] = ("warning", msg)
         st.rerun()
 
     if st.session_state["ai_result"] is not None:
         data = st.session_state["ai_result"]
         st.markdown("### Most Recent AI Extraction Result")
+        if st.session_state.get("ai_model_used"):
+            st.caption(f"Configured AI model: {st.session_state['ai_model_used']}; extraction temperature: 0; output format: JSON.")
         st.json(data)
         if data["can_predict"]:
-            st.success("All fields are complete. Please review the structured fields before prediction.")
+            st.success("All required fields were extracted. Please review each structured field before prediction.")
         else:
-            st.warning("Information is still incomplete. The system will not guess or fabricate missing fields.")
+            st.warning("Information is incomplete or uncertain. The system will not guess or fabricate missing fields.")
         if data.get("missing_fields"):
             st.error("Missing fields: " + ", ".join(data["missing_fields"]))
         if data.get("uncertainties"):
@@ -463,21 +416,31 @@ with main_col:
         "LEDD": float(ledd),
     }
 
+    st.checkbox(
+        "I have reviewed and confirmed all structured fields above. I understand that AI-assisted extraction only pre-fills variables and does not calculate risk.",
+        key="review_confirmed",
+    )
+
     if st.button("Start prediction", type="primary"):
-        missing_fields = validate_payload(payload)
-        if missing_fields:
-            st.error(f"The following fields are missing: {', '.join(missing_fields)}")
+        if not st.session_state.get("review_confirmed", False):
+            st.error("Please review and confirm the structured fields before starting prediction.")
             st.session_state["latest_prediction"] = None
             st.session_state["latest_payload"] = payload
         else:
-            try:
-                result = predict_fit10_python(payload)
-                st.session_state["latest_prediction"] = result
-                st.session_state["latest_payload"] = payload
-            except Exception as e:
-                st.error(f"Prediction failed: {str(e)}")
+            missing_fields = validate_payload(payload)
+            if missing_fields:
+                st.error(f"The following fields are missing: {', '.join(missing_fields)}")
                 st.session_state["latest_prediction"] = None
                 st.session_state["latest_payload"] = payload
+            else:
+                try:
+                    result = predict_fit10_python(payload)
+                    st.session_state["latest_prediction"] = result
+                    st.session_state["latest_payload"] = payload
+                except Exception as e:
+                    st.error(f"Prediction failed: {str(e)}")
+                    st.session_state["latest_prediction"] = None
+                    st.session_state["latest_payload"] = payload
 
     if st.session_state["latest_prediction"] is not None:
         show_prediction_result(st.session_state["latest_prediction"])
@@ -489,6 +452,7 @@ with qa_col:
 
 st.markdown("---")
 st.caption(
-    "Note: AI is used for structured extraction and patient education only. Risk values are calculated deterministically from the final 11-predictor Cox model pooled across 20 multiply imputed datasets. "
-    "The displayed risk-stratification category is supportive only and must not be used as an independent treatment-decision threshold."
+    "Note: AI is used for structured extraction and patient education only. Risk values are calculated deterministically "
+    "from the final 11-predictor Cox model pooled across 20 multiply imputed datasets. The web interface reports continuous "
+    "2-, 4-, and 6-year risks/survival probabilities and does not display low/high clinical risk labels."
 )

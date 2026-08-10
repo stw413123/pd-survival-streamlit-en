@@ -1,7 +1,8 @@
-"""Deterministic prediction engine for the final MI-pooled Cox survival model.
+"""Deterministic prediction engine for the final MI20-pooled Cox survival model.
 
 The JSON model export is generated in R after multiple imputation and pooling.
-AI-assisted modules in the Streamlit interface do not calculate risk.
+AI-assisted modules in the Streamlit interface do not calculate risk, impute
+missing values, fit models, or assign risk groups.
 """
 
 from __future__ import annotations
@@ -17,17 +18,13 @@ with MODEL_PATH.open("r", encoding="utf-8") as f:
 
 COEFS = MODEL_EXPORT["coefficients"]
 FACTOR_LEVELS = MODEL_EXPORT.get("factor_levels", {})
-HORIZONS = [int(x) for x in MODEL_EXPORT.get("horizons_years", [3, 5, 7])]
+HORIZONS = [int(x) for x in MODEL_EXPORT.get("horizons_years", [2, 4, 6])]
 REQUIRED_FIELDS = list(MODEL_EXPORT.get("predictors", []))
 NUMERIC_FIELDS = [field for field in REQUIRED_FIELDS if field not in FACTOR_LEVELS]
 
 RISK_STRATIFICATION = MODEL_EXPORT.get("risk_stratification", {}) or {}
-LP_CUTOFF = RISK_STRATIFICATION.get("lp_cutoff")
-POINTS_CUTOFF = RISK_STRATIFICATION.get("points_cutoff")
 POINT_UNIT = RISK_STRATIFICATION.get("point_unit")
 LP_MIN_FOR_POINTS = RISK_STRATIFICATION.get("lp_min_for_points")
-LP_CUTOFF = float(LP_CUTOFF) if LP_CUTOFF is not None else None
-POINTS_CUTOFF = float(POINTS_CUTOFF) if POINTS_CUTOFF is not None else None
 POINT_UNIT = float(POINT_UNIT) if POINT_UNIT is not None else None
 LP_MIN_FOR_POINTS = float(LP_MIN_FOR_POINTS) if LP_MIN_FOR_POINTS is not None else None
 LP_CENTERING_CONSTANT = float(
@@ -42,8 +39,10 @@ def _load_baseline_survival() -> Dict[str, float]:
             f"{int(item['horizon'])}y": float(item["baseline_survival"])
             for item in MODEL_EXPORT["baseline_survival_at_horizons"]
         }
+
     if "baseline_survival_at_lp0" in MODEL_EXPORT:
         return {str(k): float(v) for k, v in MODEL_EXPORT["baseline_survival_at_lp0"].items()}
+
     if "baseline_cumulative_hazard" in MODEL_EXPORT:
         table = MODEL_EXPORT["baseline_cumulative_hazard"]
         xs = [float(row["time"]) for row in table]
@@ -64,6 +63,7 @@ def _load_baseline_survival() -> Dict[str, float]:
             return ys[-1]
 
         return {f"{h}y": math.exp(-interpolate_hazard(float(h))) for h in HORIZONS}
+
     raise ValueError("No baseline survival information was found in fit10_export_for_python.json.")
 
 
@@ -74,11 +74,14 @@ def model_summary() -> Dict[str, Any]:
     """Expose model provenance for display in the web interface."""
     return {
         "model_type": MODEL_EXPORT.get("model_type", "Cox proportional hazards model"),
+        "time_origin": MODEL_EXPORT.get("time_origin"),
+        "outcome": MODEL_EXPORT.get("outcome"),
         "imputation_method": MODEL_EXPORT.get("imputation_method"),
         "number_of_imputations": MODEL_EXPORT.get("number_of_imputations"),
         "predictor_set": MODEL_EXPORT.get("selected_predictor_set_name"),
-        "outcome": MODEL_EXPORT.get("outcome"),
         "horizons_years": HORIZONS,
+        "predictors": REQUIRED_FIELDS,
+        "risk_cutoff_available_for_manuscript_descriptive_analysis": bool(RISK_STRATIFICATION),
     }
 
 
@@ -149,7 +152,6 @@ def compute_raw_score(payload: Dict[str, Any]) -> float:
 
 
 def compute_linear_predictor(payload: Dict[str, Any]) -> float:
-    # With centered=FALSE baseline hazard from the R export, the constant is normally 0.
     return compute_raw_score(payload) - LP_CENTERING_CONSTANT
 
 
@@ -157,12 +159,6 @@ def compute_nomogram_points_from_lp(raw_lp: float) -> float | None:
     if POINT_UNIT is None or LP_MIN_FOR_POINTS is None or POINT_UNIT == 0:
         return None
     return (raw_lp - LP_MIN_FOR_POINTS) / POINT_UNIT
-
-
-def classify_risk_by_lp(lp_value: float) -> str:
-    if LP_CUTOFF is None:
-        return "Not assigned"
-    return "High risk" if lp_value > LP_CUTOFF else "Low risk"
 
 
 def _survival_for_horizon(horizon: int, hazard_multiplier: float) -> float:
@@ -173,7 +169,7 @@ def _survival_for_horizon(horizon: int, hazard_multiplier: float) -> float:
 
 
 def predict_fit10_python(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Return deterministic 3-/5-/7-year survival risk estimates."""
+    """Return deterministic 2-/4-/6-year survival and mortality risk estimates."""
     _assert_allowed(payload)
     raw_lp = compute_raw_score(payload)
     lp = raw_lp - LP_CENTERING_CONSTANT
@@ -181,18 +177,16 @@ def predict_fit10_python(payload: Dict[str, Any]) -> Dict[str, Any]:
     points = compute_nomogram_points_from_lp(raw_lp)
     survival = {h: _survival_for_horizon(h, hazard_multiplier) for h in HORIZONS}
 
-    cutoff_scale = RISK_STRATIFICATION.get("lp_scale", "raw_uncentered_linear_predictor")
-    cutoff_value = raw_lp if cutoff_scale == "raw_uncentered_linear_predictor" else lp
-
     predictions: Dict[str, Any] = {
         "linear_predictor": round(lp, 6),
         "raw_linear_predictor": round(raw_lp, 6),
         "relative_hazard_vs_lp0": round(hazard_multiplier, 6),
         "nomogram_points": round(points, 2) if points is not None else None,
-        "risk_group": classify_risk_by_lp(cutoff_value),
-        "lp_cutoff_for_risk_group": round(LP_CUTOFF, 6) if LP_CUTOFF is not None else None,
-        "points_cutoff_for_risk_group": round(POINTS_CUTOFF, 2) if POINTS_CUTOFF is not None else None,
-        "risk_group_note": RISK_STRATIFICATION.get("note"),
+        "risk_group_note": (
+            "The web interface intentionally does not display low/high risk labels. "
+            "Any exported cutoff is retained only for manuscript-level descriptive plots, "
+            "not as an independent treatment-decision threshold."
+        ),
     }
     for horizon in HORIZONS:
         predictions[f"survival_{horizon}y"] = round(survival[horizon], 6)
